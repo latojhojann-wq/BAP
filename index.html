@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<title>Visor URL</title>
+<style>
+  :root {
+    --bg: #f4f6fb; --card: #ffffff; --text: #0f172a; --muted: #64748b;
+    --primary: #2563eb; --primary-text: #ffffff; --border: #dbe1ec; --danger: #dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1220; --card: #111a2e; --text: #e8edf7; --muted: #93a1ba;
+      --primary: #3b82f6; --primary-text: #ffffff; --border: #24314d; --danger: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { padding: max(20px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom)); }
+  main { max-width: 520px; margin: 0 auto; display: grid; gap: 16px; }
+  h1 { font-size: 1.5rem; margin: 8px 0 0; }
+  p.sub { margin: 0; color: var(--muted); font-size: .95rem; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px; display: grid; gap: 12px; }
+  label { font-weight: 600; font-size: .9rem; }
+  input[type=url] { width: 100%; padding: 14px; font-size: 1rem; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+  input[type=url]:focus { outline: 2px solid var(--primary); border-color: transparent; }
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 10px; padding: 14px; cursor: pointer; }
+  button.primary { background: var(--primary); color: var(--primary-text); font-size: 1.05rem; }
+  button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .row input[type=checkbox] { width: 20px; height: 20px; }
+  .error { color: var(--danger); font-size: .9rem; min-height: 1.2em; margin: 0; }
+  ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  li { display: flex; gap: 8px; align-items: stretch; }
+  li button.open { flex: 1; text-align: left; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  li button.del { width: 48px; background: transparent; color: var(--danger); border: 1px solid var(--border); }
+  video { width: 100%; border-radius: 10px; background: #000; max-height: 260px; }
+  .hint { color: var(--muted); font-size: .85rem; margin: 0; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Visor URL</h1>
+    <p class="sub">Escribe la dirección de tu sistema y ábrelo con acceso a la cámara.</p>
+  </header>
+
+  <section class="card">
+    <label for="url">Dirección (URL)</label>
+    <input id="url" type="url" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false"
+           placeholder="https://script.google.com/macros/s/.../exec">
+    <p id="error" class="error" role="alert"></p>
+    <button id="open" class="primary" type="button">Abrir</button>
+    <div class="row">
+      <input id="auto" type="checkbox">
+      <label for="auto" style="font-weight:400">Abrir automáticamente la última URL al iniciar</label>
+    </div>
+    <p class="hint">Para volver a esta pantalla desde la página abierta, usa el botón Atrás de Android.</p>
+  </section>
+
+  <section class="card" id="recentCard" hidden>
+    <label>Recientes</label>
+    <ul id="recent"></ul>
+  </section>
+
+  <section class="card">
+    <label>Probar cámara</label>
+    <button id="camBtn" class="ghost" type="button">Activar cámara de prueba</button>
+    <video id="cam" playsinline muted autoplay hidden></video>
+    <p id="camMsg" class="hint"></p>
+  </section>
+</main>
+
+<script>
+(function () {
+  var KEY_LIST = 'visorurl.recent';
+  var KEY_AUTO = 'visorurl.auto';
+  var SESSION_FLAG = 'visorurl.opened';
+
+  var $url = document.getElementById('url');
+  var $err = document.getElementById('error');
+  var $auto = document.getElementById('auto');
+  var $recentCard = document.getElementById('recentCard');
+  var $recent = document.getElementById('recent');
+
+  function load() {
+    try { return JSON.parse(localStorage.getItem(KEY_LIST) || '[]'); } catch (e) { return []; }
+  }
+  function save(list) {
+    try { localStorage.setItem(KEY_LIST, JSON.stringify(list)); } catch (e) {}
+  }
+
+  function normalize(raw) {
+    var v = (raw || '').trim();
+    if (!v) return null;
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) v = 'https://' + v;
+    try {
+      var u = new URL(v);
+      if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+      if (!u.hostname) return null;
+      return u.href;
+    } catch (e) { return null; }
+  }
+
+  function renderRecent() {
+    var list = load();
+    $recent.innerHTML = '';
+    $recentCard.hidden = list.length === 0;
+    list.forEach(function (href) {
+      var li = document.createElement('li');
+      var b = document.createElement('button');
+      b.className = 'open'; b.type = 'button'; b.textContent = href; b.title = href;
+      b.addEventListener('click', function () { go(href); });
+      var d = document.createElement('button');
+      d.className = 'del'; d.type = 'button'; d.textContent = '✕';
+      d.setAttribute('aria-label', 'Quitar de recientes');
+      d.addEventListener('click', function () {
+        save(load().filter(function (x) { return x !== href; }));
+        renderRecent();
+      });
+      li.appendChild(b); li.appendChild(d); $recent.appendChild(li);
+    });
+  }
+
+  function go(href) {
+    var list = load().filter(function (x) { return x !== href; });
+    list.unshift(href);
+    save(list.slice(0, 6));
+    try { sessionStorage.setItem(SESSION_FLAG, '1'); } catch (e) {}
+    window.location.href = href;
+  }
+
+  document.getElementById('open').addEventListener('click', function () {
+    var href = normalize($url.value);
+    if (!href) { $err.textContent = 'Escribe una dirección válida (por ejemplo https://ejemplo.com).'; return; }
+    $err.textContent = '';
+    go(href);
+  });
+  $url.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') document.getElementById('open').click();
+  });
+
+  $auto.checked = (function () { try { return localStorage.getItem(KEY_AUTO) === '1'; } catch (e) { return false; } })();
+  $auto.addEventListener('change', function () {
+    try { localStorage.setItem(KEY_AUTO, $auto.checked ? '1' : '0'); } catch (e) {}
+  });
+
+  var list = load();
+  if (list.length) $url.value = list[0];
+  renderRecent();
+
+  // Apertura automática solo una vez por ejecución, para poder volver con Atrás.
+  var already = false;
+  try { already = sessionStorage.getItem(SESSION_FLAG) === '1'; } catch (e) {}
+  if ($auto.checked && list.length && !already) go(list[0]);
+
+  // Prueba de cámara
+  var $cam = document.getElementById('cam');
+  var $camMsg = document.getElementById('camMsg');
+  var stream = null;
+  document.getElementById('camBtn').addEventListener('click', function () {
+    if (stream) {
+      stream.getTracks().forEach(function (t) { t.stop(); });
+      stream = null; $cam.hidden = true; $cam.srcObject = null;
+      this.textContent = 'Activar cámara de prueba'; $camMsg.textContent = '';
+      return;
+    }
+    var btn = this;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      $camMsg.textContent = 'Este dispositivo no expone la cámara al navegador interno.'; return;
+    }
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
+      .then(function (s) {
+        stream = s; $cam.srcObject = s; $cam.hidden = false;
+        btn.textContent = 'Detener cámara'; $camMsg.textContent = 'La cámara funciona.';
+      })
+      .catch(function (e) {
+        $camMsg.textContent = 'No se pudo abrir la cámara: ' + (e && e.name ? e.name : e) +
+          '. Revisa el permiso de cámara en Ajustes > Apps > Visor URL.';
+      });
+  });
+})();
+</script>
+</body>
+</html>
